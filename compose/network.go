@@ -2,33 +2,27 @@ package compose
 
 import (
 	"fmt"
+	"regexp"
 
 	"github.com/docker/docker/api/types"
-	networktypes "github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/network"
 )
 
 // Network contains information from compose file to create the corresponding network
 type Network struct {
-	driver     string
-	driverOpts map[string]string
-	attachable bool
-	enableIPv6 bool
-	ipamDriver string
-	ipamSubnet string
-	internal   bool
-	labels     map[string]string
-	external   bool
-	name       string
+	data     types.NetworkCreate
+	external bool
+	name     string
 }
 
 // NewNetwork creates new network config based on an element of the networks section of the compose file
 func NewNetwork(config interface{}) (Network, error) {
-	network := getDefaultNetwork()
+	network := Network{getDefaultNetwork(), false, ""}
 	if networkConfig, isMap := config.(map[string]interface{}); isMap {
 		if err := network.parseConfig(networkConfig); err != nil {
 			return network, err
 		}
-	} else {
+	} else if config != nil {
 		return network, fmt.Errorf("network should be a map")
 	}
 
@@ -37,127 +31,105 @@ func NewNetwork(config interface{}) (Network, error) {
 
 // GetCreateConfig returns the NetworkCreate struct required to create network with the docker API
 func (n Network) GetCreateConfig() types.NetworkCreate {
-	if n.external {
-		return types.NetworkCreate{}
-	}
-
-	createOpts := types.NetworkCreate{
-		CheckDuplicate: true,
-		Labels:         n.labels,
-		Driver:         n.driver,
-		Options:        n.driverOpts,
-		Internal:       n.internal,
-		Attachable:     n.attachable,
-		IPAM:           &networktypes.IPAM{},
-		EnableIPv6:     n.enableIPv6,
-	}
-
-	if n.ipamDriver != "" {
-		var config networktypes.IPAMConfig
-		if n.ipamSubnet != "" {
-			config = networktypes.IPAMConfig{
-				Subnet: n.ipamSubnet,
-			}
-		}
-
-		createOpts.IPAM = &networktypes.IPAM{
-			Driver: n.ipamDriver,
-			Config: []networktypes.IPAMConfig{config},
-		}
-	}
-
-	return createOpts
+	return n.data
 }
 
 // GetExternalName will return name of external network that has been created seperate to compose
 // If network not external, it will return empty string and false.
 func (n Network) GetExternalName() (string, bool) {
-	if n.external {
-		return n.name, n.external
-	}
-	return "", n.external
+	return n.name, n.external
 }
 
 func (n *Network) parseConfig(config map[string]interface{}) error {
-	//TODO: still need to process name
-	if err := setValue(&n.driver, "driver", config, nil); err != nil {
-		return err
+	// TODO: add validation functions
+	mapping := []setValueMapping{
+		{"driver", &n.data.Driver, nil, validateNetworkDriver},
+		{"driver_opts", &n.data.Options, convertToStringMap, nil},
+		{"attachable", &n.data.Attachable, nil, nil},
+		{"enable_ipv6", &n.data.EnableIPv6, nil, nil},
+		{"internal", &n.data.Internal, nil, nil},
+		{"labels", &n.data.Labels, convertToStringMap, nil},
+		{"ipam", n.data.IPAM, convertIPAM, nil},
+		//// External networks
+		{"external", &n.external, nil, nil},
+		{"name", &n.name, nil, nil},
 	}
-	if n.driver != "bridge" && n.driver != "overlay" && n.driver != "host" && n.driver != "none" {
-		return fmt.Errorf("driver must be set to one of bridge, overlay, host or none")
-	}
-
-	if err := setValue(&n.driverOpts, "driver_opts", config, nil); err != nil {
-		return err
-	}
-
-	if err := setValue(&n.attachable, "attachable", config, nil); err != nil {
-		return err
-	}
-
-	if err := setValue(&n.enableIPv6, "enable_ipv6", config, nil); err != nil {
+	if err := setValues(mapping, config); err != nil {
 		return err
 	}
 
-	if err := setValue(&n.external, "external", config, nil); err != nil {
-		return err
-	}
-
-	if err := setValue(&n.internal, "internal", config, nil); err != nil {
-		return err
-	}
-
-	if err := setValue(&n.labels, "labels", config, nil); err != nil {
-		return err
-	}
-
-	if err := setValue(&n.name, "name", config, nil); err != nil {
-		return err
-	}
-
-	return n.parseIPAM(config)
-}
-
-// TODO: figure out if we need to accept multiple subnets or other config
-func (n *Network) parseIPAM(config map[string]interface{}) error {
-	if ipamInterface, isSet := config["ipam"]; isSet {
-		ipam, isMap := ipamInterface.(map[string]interface{})
-		if !isMap {
-			return fmt.Errorf("ipam must be a map")
-		}
-		if driverInterface, isDriverSet := ipam["driver"]; isDriverSet {
-			driver, isString := driverInterface.(string)
-			if !isString {
-				return fmt.Errorf("IPAM driver should be a string")
-			}
-			n.ipamDriver = driver
-		}
-		if configInterface, isConfigSet := ipam["config"]; isConfigSet {
-			conf, isArray := configInterface.([]map[string]string)
-			if !isArray {
-				return fmt.Errorf("IPAM config should be an array")
-			}
-			if len(conf) > 0 {
-				if subnet, isSubnetSet := conf[0]["subnet"]; isSubnetSet {
-					n.ipamSubnet = subnet
-				}
-			}
-		}
-	}
 	return nil
 }
 
-func getDefaultNetwork() Network {
-	return Network{
-		driver:     "bridge",
-		driverOpts: map[string]string{},
-		attachable: false,
-		enableIPv6: false,
-		ipamDriver: "",
-		ipamSubnet: "",
-		internal:   false,
-		labels:     map[string]string{},
-		external:   false,
-		name:       "",
+func validateNetworkDriver(input interface{}) error {
+	if driver, isStr := input.(string); isStr {
+		for _, validDriver := range []string{"bridge", "overlay", "host", "none"} {
+			if driver == validDriver {
+				return nil
+			}
+		}
+		return fmt.Errorf("%s is not a valid driver", driver)
+	}
+	return fmt.Errorf("driver must be a string")
+}
+
+func convertIPAM(input interface{}) (interface{}, error) {
+	if config, isMap := input.(map[string]interface{}); isMap {
+		ipam := network.IPAM{}
+		// TODO: add validation functions
+		mapping := []setValueMapping{
+			{"driver", &ipam.Driver, nil, nil},
+			{"config", &ipam.Config, convertIPAMConfig, nil},
+		}
+		if err := setValues(mapping, config); err != nil {
+			return nil, err
+		}
+		return ipam, nil
+	}
+	return nil, fmt.Errorf("ipam should be a map")
+}
+
+var ipv4Cidr = "^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\\/(3[0-2]|[1-2][0-9]|[0-9]))$"
+var ipv6Cidr = "^s*((([0-9A-Fa-f]{1,4}:){7}([0-9A-Fa-f]{1,4}|:))|(([0-9A-Fa-f]{1,4}:){6}(:[0-9A-Fa-f]{1,4}|((25[0-5]|2[0-4]d|1dd|[1-9]?d)(.(25[0-5]|2[0-4]d|1dd|[1-9]?d)){3})|:))|(([0-9A-Fa-f]{1,4}:){5}(((:[0-9A-Fa-f]{1,4}){1,2})|:((25[0-5]|2[0-4]d|1dd|[1-9]?d)(.(25[0-5]|2[0-4]d|1dd|[1-9]?d)){3})|:))|(([0-9A-Fa-f]{1,4}:){4}(((:[0-9A-Fa-f]{1,4}){1,3})|((:[0-9A-Fa-f]{1,4})?:((25[0-5]|2[0-4]d|1dd|[1-9]?d)(.(25[0-5]|2[0-4]d|1dd|[1-9]?d)){3}))|:))|(([0-9A-Fa-f]{1,4}:){3}(((:[0-9A-Fa-f]{1,4}){1,4})|((:[0-9A-Fa-f]{1,4}){0,2}:((25[0-5]|2[0-4]d|1dd|[1-9]?d)(.(25[0-5]|2[0-4]d|1dd|[1-9]?d)){3}))|:))|(([0-9A-Fa-f]{1,4}:){2}(((:[0-9A-Fa-f]{1,4}){1,5})|((:[0-9A-Fa-f]{1,4}){0,3}:((25[0-5]|2[0-4]d|1dd|[1-9]?d)(.(25[0-5]|2[0-4]d|1dd|[1-9]?d)){3}))|:))|(([0-9A-Fa-f]{1,4}:){1}(((:[0-9A-Fa-f]{1,4}){1,6})|((:[0-9A-Fa-f]{1,4}){0,4}:((25[0-5]|2[0-4]d|1dd|[1-9]?d)(.(25[0-5]|2[0-4]d|1dd|[1-9]?d)){3}))|:))|(:(((:[0-9A-Fa-f]{1,4}){1,7})|((:[0-9A-Fa-f]{1,4}){0,5}:((25[0-5]|2[0-4]d|1dd|[1-9]?d)(.(25[0-5]|2[0-4]d|1dd|[1-9]?d)){3}))|:)))(%.+)?s*"
+
+func convertIPAMConfig(input interface{}) (interface{}, error) {
+	if config, isList := input.([]interface{}); isList {
+		ipamConfig := []network.IPAMConfig{}
+		for _, element := range config {
+			if element, isMap := element.(map[string]interface{}); isMap {
+				// subnet should be only element so any more if incorrect
+				if len(element) > 1 {
+					return nil, fmt.Errorf("contained invalid element")
+				}
+				if subnet, isSet := element["subnet"]; isSet {
+					subnet, err := getString(subnet)
+					if err != nil {
+						return nil, fmt.Errorf("subnet: %s", err.Error())
+					}
+					if match, _ := regexp.MatchString(ipv4Cidr+"|"+ipv6Cidr, subnet); !match {
+						return nil, fmt.Errorf("subnet was not valid")
+					}
+					ipamConfig = append(ipamConfig, network.IPAMConfig{Subnet: subnet})
+				} else {
+					return nil, fmt.Errorf("did not contain subnet")
+				}
+			} else {
+				return nil, fmt.Errorf("should be a map[string]string")
+			}
+		}
+		return ipamConfig, nil
+	}
+	return nil, fmt.Errorf("config should be a list")
+}
+
+func getDefaultNetwork() types.NetworkCreate {
+	return types.NetworkCreate{
+		Driver:     "bridge",
+		Options:    map[string]string{},
+		Attachable: false,
+		EnableIPv6: false,
+		IPAM:       new(network.IPAM),
+		Internal:   false,
+		Labels:     map[string]string{},
 	}
 }

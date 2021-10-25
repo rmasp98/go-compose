@@ -2,6 +2,7 @@ package compose_test
 
 import (
 	"fmt"
+	"io/ioutil"
 	"os"
 	"testing"
 
@@ -61,6 +62,32 @@ func TestParseVolumes(t *testing.T) {
 	volume := stack.GetVolumeCreate("testVolume")
 	if volume.Driver != "local" {
 		t.Errorf("Driver should be \"local\" but got \"%s\"", volume.Driver)
+	}
+}
+
+func TestErrorIfServicesNotMap(t *testing.T) {
+	yamlData := parseYaml("services: \"Not a service\"")
+	if _, err := compose.NewStack(yamlData); err == nil {
+		t.Errorf("Should have returned an error but returned nothing")
+	}
+}
+
+func TestParseServicess(t *testing.T) {
+	serviceCompose := "services:\n   testService:\n      image: \"SomeImage\""
+	yamlData := parseYaml(serviceCompose)
+	stack, _ := compose.NewStack(yamlData)
+	service := stack.GetServiceContainerCreate("testService")
+	if service.Image != "SomeImage" {
+		t.Errorf("Driver should be \"SomeImage\" but got \"%s\"", service.Image)
+	}
+}
+
+func TestCanParseFullComposeFile(t *testing.T) {
+	composeFile, _ := ioutil.ReadFile("../test_data/compose.yaml")
+	yamlData := parseYaml(string(composeFile))
+	_, err := compose.NewStack(yamlData)
+	if err != nil {
+		t.Error(err)
 	}
 }
 

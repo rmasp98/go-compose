@@ -2,10 +2,10 @@ package compose_test
 
 import (
 	"fmt"
-	"reflect"
 	"testing"
 
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/network"
 	"github.com/rmasp98/go-compose/compose"
 )
 
@@ -15,31 +15,24 @@ func TestInvalidNetworkConfig(t *testing.T) {
 	}
 }
 
-func TestEmptyConfigSetsDefaults(t *testing.T) {
-	network, _ := compose.NewNetwork(map[string]interface{}{})
-	if err := verifyNetwork(network, defaultNetwork()); err != nil {
-		t.Errorf(err.Error())
+func TestReturnsDefaultForEmptyNetwork(t *testing.T) {
+	network, _ := compose.NewNetwork(nil)
+	createConfig := network.GetCreateConfig()
+	if createConfig.Driver != "bridge" {
+		t.Errorf("Should have returned bridge but got \"%s\"", createConfig.Driver)
 	}
 }
 
 func TestCustomNetworkConfigurable(t *testing.T) {
-	custom := customNetwork()
-	network, _ := compose.NewNetwork(custom)
-	if err := verifyNetwork(network, custom); err != nil {
-		t.Errorf(err.Error())
-	}
-}
-
-func TestExternalNetworkReturnsEmptyNetworkCreate(t *testing.T) {
-	network, _ := compose.NewNetwork(map[string]interface{}{"external": true})
-	if !reflect.DeepEqual(network.GetCreateConfig(), types.NetworkCreate{}) {
-		t.Errorf("Did not return empty NetowrkCreate")
-	}
-}
-
-func TestReturnsErrorIfNetworkDriverInvalid(t *testing.T) {
-	if _, err := compose.NewNetwork(map[string]interface{}{"driver": "invalid"}); err == nil {
-		t.Errorf("Should have returned an error but returned nothing")
+	for _, mapping := range getNetworkMapping() {
+		network, err := compose.NewNetwork(map[string]interface{}{mapping.name: mapping.source})
+		if err != nil {
+			t.Errorf(err.Error())
+			return
+		}
+		if err := verifyNetworkConfig(mapping.name, mapping.expected, network.GetCreateConfig()); err != nil {
+			t.Errorf(err.Error())
+		}
 	}
 }
 
@@ -76,96 +69,68 @@ func TestReturnsNameForExternalNetwork(t *testing.T) {
 	}
 }
 
-func TestReturnsEmptyForNonExternalNetwork(t *testing.T) {
-	network, _ := compose.NewNetwork(map[string]interface{}{"name": "Test"})
-	name, external := network.GetExternalName()
-	if name != "" || external {
-		t.Errorf("Name was not correct: \"%s\"", name)
-	}
-}
-
-// Helper data and functions
-type networkSettings struct {
-	driver     string
-	driverOpts map[string]string
-	attachable bool
-	enableIPv6 bool
-	ipamDriver string
-	ipamSubnet string
-	internal   bool
-	labels     map[string]string
-	external   bool
-	name       string
-}
-
-func defaultNetwork() map[string]interface{} {
-	return map[string]interface{}{
-		"driver":      "bridge",
-		"driver_opts": map[string]string{},
-		"attachable":  false,
-		"enable_ipv6": false,
-		"ipam":        map[string]interface{}{},
-		"internal":    false,
-		"labels":      map[string]string{},
-		"external":    false,
-		"name":        "",
-	}
-}
-
-func customNetwork() map[string]interface{} {
-	return map[string]interface{}{
-		"driver":      "host",
-		"driver_opts": map[string]string{"Test": "Me"},
-		"attachable":  true,
-		"enable_ipv6": true,
-		"ipam": map[string]interface{}{"driver": "test",
-			"config": []map[string]string{{"subnet": "172.28.0.0/16"}}},
-		"internal": true,
-		"labels":   map[string]string{"Test": "Me"},
-		"name":     "Test",
-	}
-}
-
-func verifyNetwork(network compose.Network, settings map[string]interface{}) error {
-	config := network.GetCreateConfig()
-
-	// TODO: external and name is not checked yet
-	if config.Driver != settings["driver"] {
-		return fmt.Errorf("Driver was set to \"%s\" but should be \"%s\"", config.Driver, settings["driver"])
-	}
-	if !reflect.DeepEqual(config.Options, settings["driver_opts"]) {
-		return fmt.Errorf("Driver options were set to %v but should be %v",
-			config.Options, settings["driver_opts"])
-	}
-	if config.Attachable != settings["attachable"] {
-		return fmt.Errorf("Attachable was set to %t but should be %t",
-			config.Attachable, settings["attachable"])
-	}
-	if config.EnableIPv6 != settings["enable_ipv6"] {
-		return fmt.Errorf("IPv6 was set to %t but should be %t", config.EnableIPv6, settings["enable_ipv6"])
-	}
-	ipam := settings["ipam"].(map[string]interface{})
-	if driver, isSet := ipam["driver"]; isSet && config.IPAM.Driver != driver.(string) {
-		return fmt.Errorf("IPAM Driver was set to \"%s\" but should be \"%s\"",
-			config.IPAM.Driver, driver)
-	}
-	if ipamConfig, isSet := ipam["config"]; isSet {
-		subnets := ipamConfig.([]map[string]string)
-		if len(subnets) != len(config.IPAM.Config) {
-			return fmt.Errorf("There are not the same number of subnets configured")
-		}
-		for i := range subnets {
-			if subnets[i]["subnet"] != config.IPAM.Config[i].Subnet {
-				return fmt.Errorf("Subnet \"%s\" is not the same as \"%s\"",
-					config.IPAM.Config[i].Subnet, subnets[i]["subnet"])
-			}
+func TestReturnsErrorForInvalidData(t *testing.T) {
+	for _, mapping := range getInvalidNetworkConfig() {
+		if _, err := compose.NewNetwork(map[string]interface{}{mapping.name: mapping.data}); err == nil {
+			t.Errorf("%s should have returned error but did not", mapping.name)
+			return
 		}
 	}
-	if config.Internal != settings["internal"] {
-		return fmt.Errorf("Internal configured to %t but should be %t", config.Internal, settings["internal"])
+}
+
+// Test data and helper functions
+var (
+	sourceIPAM   = map[string]interface{}{"driver": "test", "config": []interface{}{map[string]interface{}{"subnet": "172.28.0.0/16"}}}
+	expectedIPAM = network.IPAM{Driver: "test", Config: []network.IPAMConfig{{Subnet: "172.28.0.0/16"}}}
+)
+
+func getNetworkMapping() []verifyMapping {
+	return []verifyMapping{
+		{"driver", "host", "host"},
+		{"driver_opts", map[string]interface{}{"Test": "Me"}, map[string]string{"Test": "Me"}},
+		{"attachable", true, true},
+		{"enable_ipv6", true, true},
+		{"ipam", sourceIPAM, expectedIPAM},
+		{"internal", true, true},
+		{"labels", map[string]interface{}{"Test": "Me"}, map[string]string{"Test": "Me"}},
+		{"external", true, true},
+		{"name", "Test", "Test"},
 	}
-	if !reflect.DeepEqual(config.Labels, settings["labels"]) {
-		return fmt.Errorf("Labels are %v when should be %v", config.Labels, settings["labels"])
+}
+
+func verifyNetworkConfig(name string, expected interface{}, config types.NetworkCreate) error {
+	var err error
+	switch name {
+	case "driver":
+		err = verifyValue(expected, config.Driver)
+	case "driver_opts":
+		err = verifyValue(expected, config.Options)
+	case "attachable":
+		err = verifyValue(expected, config.Attachable)
+	case "enable_ipv6":
+		err = verifyValue(expected, config.EnableIPv6)
+	case "ipam":
+		err = verifyValue(expected, *config.IPAM)
+	case "internal":
+		err = verifyValue(expected, config.Internal)
+	case "labels":
+		err = verifyValue(expected, config.Labels)
+	}
+	if err != nil {
+		return fmt.Errorf("%s: %s", name, err.Error())
 	}
 	return nil
+}
+
+type invalidMapping struct {
+	name string
+	data interface{}
+}
+
+func getInvalidNetworkConfig() []invalidMapping {
+	return []invalidMapping{
+		{"driver", "invalid"},
+		{"ipam", map[string]interface{}{"config": []interface{}{map[string]interface{}{"invalid": "test"}}}},
+		{"ipam", map[string]interface{}{"config": []interface{}{map[string]interface{}{"subnet": "invalid"}}}},
+	}
 }

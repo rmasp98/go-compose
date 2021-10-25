@@ -65,7 +65,7 @@ services:
     # Booleans are not allowed - must be quoted
     environment:
       RACK_ENV: development
-      SHOW: 'true'
+      SHOW: true
       SESSION_SECRET:
       BAZ: 3
     # environment:
@@ -239,8 +239,8 @@ networks:
   other-external-network:
     # Specifies that a pre-existing network called "my-cool-network"
     # can be referred to within this file as "other-external-network"
-    external:
-      name: my-cool-network
+    external: true
+    name: my-cool-network
 
 volumes:
   # Entries can be null, which specifies simply that a volume
@@ -260,10 +260,4 @@ volumes:
     # Specifies that a pre-existing volume called "external-volume"
     # can be referred to within this file as "external-volume"
     external: true
-
-  other-external-volume:
-    # Specifies that a pre-existing volume called "my-cool-volume"
-    # can be referred to within this file as "other-external-volume"
-    external:
-      name: my-cool-volume
 

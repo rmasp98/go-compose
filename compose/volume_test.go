@@ -9,17 +9,22 @@ import (
 	"github.com/rmasp98/go-compose/compose"
 )
 
-func TestInvalidVolumeConfig(t *testing.T) {
+func TestConfigNotMapReturnsError(t *testing.T) {
 	if _, err := compose.NewVolume("invalid config"); err == nil {
 		t.Errorf("Should return error but returned nothing")
 	}
 }
 
 func TestCustomVolumeConfigurable(t *testing.T) {
-	custom := customVolume()
-	vol, _ := compose.NewVolume(custom)
-	if err := verifyVolume(vol, custom); err != nil {
-		t.Errorf(err.Error())
+	for _, mapping := range getVolumeMapping() {
+		vol, err := compose.NewVolume(map[string]interface{}{mapping.name: mapping.source})
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if err := verifyVolumeConfig(mapping.name, mapping.expected, vol.GetCreateConfig()); err != nil {
+			t.Error(err)
+		}
 	}
 }
 
@@ -49,11 +54,9 @@ func TestReturnsNameForExternalVolume(t *testing.T) {
 	}
 }
 
-func TestReturnsEmptyForNonExternalVolume(t *testing.T) {
-	vol, _ := compose.NewVolume(map[string]interface{}{"external": false, "name": "Test"})
-	name, external := vol.GetExternalName()
-	if name != "" || external {
-		t.Errorf("Name was not correct: \"%s\"", name)
+func TestCanParseEmptyVolume(t *testing.T) {
+	if _, err := compose.NewVolume(nil); err != nil {
+		t.Error(err)
 	}
 }
 
@@ -66,22 +69,29 @@ func customVolume() map[string]interface{} {
 	}
 }
 
-func verifyVolume(vol compose.Volume, settings map[string]interface{}) error {
-	config := vol.GetCreateConfig()
+func getVolumeMapping() []verifyMapping {
+	return []verifyMapping{
+		{"driver", "local", "local"},
+		{"driver_opts", map[string]interface{}{"Test": "Me"}, map[string]string{"Test": "Me"}},
+		{"labels", map[string]interface{}{"Test": "Me"}, map[string]string{"Test": "Me"}},
+		{"name", "Test", "Test"},
+	}
+}
 
-	if config.Driver != settings["driver"] {
-		return fmt.Errorf("Driver was set to \"%s\" but should be \"%s\"", config.Driver, settings["driver"])
+func verifyVolumeConfig(name string, expected interface{}, config volume.VolumeCreateBody) error {
+	var err error
+	switch name {
+	case "driver":
+		err = verifyValue(expected, config.Driver)
+	case "driver_opts":
+		err = verifyValue(expected, config.DriverOpts)
+	case "labels":
+		err = verifyValue(expected, config.Labels)
+	case "name":
+		err = verifyValue(expected, config.Name)
 	}
-	if !reflect.DeepEqual(config.DriverOpts, settings["driver_opts"]) {
-		return fmt.Errorf("Driver options were set to %v but should be %v",
-			config.DriverOpts, settings["driver_opts"])
-	}
-	if !reflect.DeepEqual(config.Labels, settings["labels"]) {
-		return fmt.Errorf("Driver options were set to %v but should be %v",
-			config.Labels, settings["labels"])
-	}
-	if config.Name != settings["name"] {
-		return fmt.Errorf("Name was set to \"%s\" but should be \"%s\"", config.Name, settings["name"])
+	if err != nil {
+		return fmt.Errorf("%s: %s", name, err.Error())
 	}
 	return nil
 }

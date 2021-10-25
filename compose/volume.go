@@ -7,37 +7,26 @@ import (
 )
 
 type Volume struct {
-	driver     string
-	driverOpts map[string]string
-	labels     map[string]string
-	external   bool
-	name       string
+	data     volume.VolumeCreateBody
+	external bool
 }
 
 func NewVolume(config interface{}) (Volume, error) {
 	volume := Volume{}
 
 	if volumeConfig, isMap := config.(map[string]interface{}); isMap {
-		if err := setValue(&volume.driver, "driver", volumeConfig, nil); err != nil {
+		// TODO: add validation functions
+		mapping := []setValueMapping{
+			{"driver", &volume.data.Driver, nil, nil},
+			{"driver_opts", &volume.data.DriverOpts, convertToStringMap, nil},
+			{"labels", &volume.data.Labels, convertToStringMap, nil},
+			{"name", &volume.data.Name, nil, nil},
+			{"external", &volume.external, nil, nil},
+		}
+		if err := setValues(mapping, volumeConfig); err != nil {
 			return volume, err
 		}
-
-		if err := setValue(&volume.driverOpts, "driver_opts", volumeConfig, nil); err != nil {
-			return volume, err
-		}
-
-		if err := setValue(&volume.labels, "labels", volumeConfig, nil); err != nil {
-			return volume, err
-		}
-
-		if err := setValue(&volume.name, "name", volumeConfig, nil); err != nil {
-			return volume, err
-		}
-
-		if err := setValue(&volume.external, "external", volumeConfig, nil); err != nil {
-			return volume, err
-		}
-	} else {
+	} else if config != nil {
 		return volume, fmt.Errorf("volume should be a map")
 	}
 
@@ -45,20 +34,12 @@ func NewVolume(config interface{}) (Volume, error) {
 }
 
 func (v Volume) GetCreateConfig() volume.VolumeCreateBody {
-	if v.external {
-		return volume.VolumeCreateBody{}
+	if !v.external {
+		return v.data
 	}
-	return volume.VolumeCreateBody{
-		Driver:     v.driver,
-		DriverOpts: v.driverOpts,
-		Labels:     v.labels,
-		Name:       v.name,
-	}
+	return volume.VolumeCreateBody{}
 }
 
 func (v Volume) GetExternalName() (string, bool) {
-	if v.external {
-		return v.name, v.external
-	}
-	return "", v.external
+	return v.data.Name, v.external
 }

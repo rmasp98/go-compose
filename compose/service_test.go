@@ -15,76 +15,66 @@ import (
 	"github.com/rmasp98/go-compose/compose"
 )
 
-// Tests
-// Volumes can also be a list of map
-// Sort expose order
-// Read enironment variables from file?
-// dns and dns_search can also be string
-// sysctls can also be map
-// ports can also be a map
+// TODO: Sort expose order (what am I talking about?)
+// TODO: Read enironment variables from file (do we do this here?)
 
 func TestCanParseContainerConfig(t *testing.T) {
-	for name, mapping := range getContainerMapping() {
-		service, err := compose.NewService(map[string]interface{}{name: mapping.source})
+	for _, mapping := range getContainerMapping() {
+		service, err := compose.NewService(map[string]interface{}{mapping.name: mapping.source})
 		if err != nil {
 			t.Errorf(err.Error())
 			return
 		}
-		if err := verifyContainerConfig(name, mapping.expected, service.GetContainerConfig()); err != nil {
-			t.Errorf(err.Error())
-		}
-	}
-}
-
-func TestCanParseAltContainerConfig(t *testing.T) {
-	for name, mapping := range getAltContainerMapping() {
-		service, err := compose.NewService(map[string]interface{}{name: mapping.source})
-		if err != nil {
-			t.Errorf(err.Error())
-			return
-		}
-		if err := verifyContainerConfig(name, mapping.expected, service.GetContainerConfig()); err != nil {
+		if err := verifyContainerConfig(mapping.name, mapping.expected, service.GetContainerConfig()); err != nil {
 			t.Errorf(err.Error())
 		}
 	}
 }
 
 func TestReturnsErrorForInvalidTypeInContainerConfig(t *testing.T) {
-	for name := range getContainerMapping() {
-		if _, err := compose.NewService(map[string]interface{}{name: 0}); err == nil {
-			t.Errorf("%s should have returned an error but did not", name)
+	for _, mapping := range getContainerMapping() {
+		if _, err := compose.NewService(map[string]interface{}{mapping.name: 0}); err == nil {
+			t.Errorf("%s should have returned an error but did not", mapping.name)
+		}
+	}
+}
+
+func TestReturnsErrorIfContainerConfigDataNotValid(t *testing.T) {
+	for _, mapping := range getInvalidContainerMapping() {
+		if _, err := compose.NewService(map[string]interface{}{mapping.name: 0}); err == nil {
+			t.Errorf("%s should have returned an error but did not", mapping.name)
 		}
 	}
 }
 
 func TestCanParseHostConfig(t *testing.T) {
-	for name, mapping := range getHostMapping() {
-		service, err := compose.NewService(map[string]interface{}{name: mapping.source})
+	for _, mapping := range getHostMapping() {
+		service, err := compose.NewService(map[string]interface{}{mapping.name: mapping.source})
 		if err != nil {
 			t.Errorf(err.Error())
 			return
 		}
-		if err := verifyHostConfig(name, mapping.expected, service.GetHostConfig()); err != nil {
+		if err := verifyHostConfig(mapping.name, mapping.expected, service.GetHostConfig()); err != nil {
 			t.Errorf(err.Error())
 		}
 	}
 }
 
 func TestReturnsErrorForInvalidTypeInHostConfig(t *testing.T) {
-	for name := range getHostMapping() {
-		if _, err := compose.NewService(map[string]interface{}{name: 0}); err == nil {
-			t.Errorf("%s should have returned an error but did not", name)
+	for _, mapping := range getHostMapping() {
+		if _, err := compose.NewService(map[string]interface{}{mapping.name: 0}); err == nil {
+			t.Errorf("%s should have returned an error but did not", mapping.name)
 		}
 	}
 }
 
 func TestCanParseNetworkConfig(t *testing.T) {
-	for name, mapping := range getNetworkMapping() {
+	for _, mapping := range getContainerNetworkMapping() {
 		service, err := compose.NewService(map[string]interface{}{
 			"links": sourceLinks,
 			"networks": map[string]interface{}{
 				"test": map[string]interface{}{
-					name: mapping.source,
+					mapping.name: mapping.source,
 				},
 			},
 		})
@@ -92,12 +82,13 @@ func TestCanParseNetworkConfig(t *testing.T) {
 			t.Errorf(err.Error())
 			return
 		}
-		if err := verifyNetworkConfig(name, mapping.expected, service.GetNetworkConfig()); err != nil {
+		if err := verifyContainerNetworkConfig(mapping.name, mapping.expected, service.GetNetworkConfig()); err != nil {
 			t.Errorf(err.Error())
 		}
 	}
 }
 
+// TODO: figure out if we still need this test
 //func TestReturnsErrorForInvalidTypeInNetworkConfig(t *testing.T) {
 //	for name := range getNetworkMapping() {
 //		if _, err := compose.NewService(map[string]interface{}{name: 0}); err == nil {
@@ -109,50 +100,43 @@ func TestCanParseNetworkConfig(t *testing.T) {
 // Helper functions and test data
 
 type verifyMapping struct {
+	name     string
 	source   interface{}
 	expected interface{}
 }
 
 var (
-	sourceHealthCheck   = map[string]interface{}{"test": []string{"CMD", "curl"}, "interval": "1m30s", "timeout": "10s", "retries": 3, "start_period": "40s"}
+	sourceHealthCheck   = map[string]interface{}{"test": []interface{}{"CMD", "curl"}, "interval": "1m30s", "timeout": "10s", "retries": 3, "start_period": "40s"}
 	expectedHealthCheck = container.HealthConfig{Test: []string{"CMD", "curl"}, Interval: time.Duration(90 * 1e9), Timeout: time.Duration(10 * 1e9), Retries: 3, StartPeriod: time.Duration(40 * 1e9)}
 	expectedVolumes     = map[string]struct{}{"/directory:rw": {}, "volume:/target:ro": {}}
+	sourceAltVolumes    = []map[string]interface{}{{"type": "volume", "source": "mydata", "target": "/data", "volume": map[string]bool{"nocopy": true}}}
+	expectedAltVolumes  = map[string]struct{}{"mydata:/data:rw,nocopy": {}}
 )
 
-func getContainerMapping() map[string]verifyMapping {
-	return map[string]verifyMapping{
-		"command":           {[]string{"/bin/bash", "script"}, strslice.StrSlice{"/bin/bash", "script"}},
-		"domainname":        {"Some Domain", "Some Domain"},
-		"entrypoint":        {[]string{"/bin/bash", "startup"}, strslice.StrSlice{"/bin/bash", "startup"}},
-		"environment":       {[]string{"Test=var"}, []string{"Test=var"}},
-		"expose":            {[]string{"3000", "2000"}, nat.PortSet{"3000": {}, "2000": {}}},
-		"healthcheck":       {sourceHealthCheck, &expectedHealthCheck},
-		"hostname":          {"some host", "some host"},
-		"image":             {"someimage", "someimage"},
-		"labels":            {map[string]string{"Some": "Label"}, map[string]string{"Some": "Label"}},
-		"mac_address":       {"SomeMac", "SomeMac"},
-		"stdin_open":        {true, true},
-		"stop_grace_period": {"1m30s", func(x int) *int { return &x }(90)}, //bodge for inline *int
-		"stop_signal":       {"somesignal", "somesignal"},
-		"tty":               {true, true},
-		"user":              {"Some User", "Some User"},
-		"volumes":           {[]string{"/directory", "volume:/target:ro", "/abs/dir:/target", "./reldir:/target", "~/home:/target"}, expectedVolumes},
-		"working_dir":       {"SomeDirectory", "SomeDirectory"},
-	}
-}
-
-var (
-	sourceAltVolumes   = []map[string]interface{}{{"type": "volume", "source": "mydata", "target": "/data", "volume": map[string]bool{"nocopy": true}}}
-	expectedAltVolumes = map[string]struct{}{"mydata:/data:rw,nocopy": {}}
-)
-
-func getAltContainerMapping() map[string]verifyMapping {
-	return map[string]verifyMapping{
-		"command":     {"/bin/bash script", strslice.StrSlice{"/bin/bash", "script"}},
-		"entrypoint":  {"/bin/bash startup", strslice.StrSlice{"/bin/bash", "startup"}},
-		"environment": {map[string]string{"Test": "var"}, []string{"Test=var"}},
-		"labels":      {[]string{"Some=Label"}, map[string]string{"Some": "Label"}},
-		"volumes":     {sourceAltVolumes, expectedAltVolumes},
+func getContainerMapping() []verifyMapping {
+	return []verifyMapping{
+		{"command", []interface{}{"/bin/bash", "script"}, strslice.StrSlice{"/bin/bash", "script"}},
+		{"command", "/bin/bash script", strslice.StrSlice{"/bin/bash", "script"}},
+		{"domainname", "Some Domain", "Some Domain"},
+		{"entrypoint", []interface{}{"/bin/bash", "startup"}, strslice.StrSlice{"/bin/bash", "startup"}},
+		{"entrypoint", "/bin/bash startup", strslice.StrSlice{"/bin/bash", "startup"}},
+		{"environment", []interface{}{"Test=var"}, []string{"Test=var"}},
+		{"environment", map[string]interface{}{"test1": "var", "test2": nil, "test3": 1, "test4": true}, []string{"test1=var", "test2=", "test3=1", "test4=true"}},
+		{"expose", []interface{}{3000, "2000"}, nat.PortSet{"3000": {}, "2000": {}}},
+		{"healthcheck", sourceHealthCheck, &expectedHealthCheck},
+		{"hostname", "some host", "some host"},
+		{"image", "someimage", "someimage"},
+		{"labels", map[string]interface{}{"Some": "Label"}, map[string]string{"Some": "Label"}},
+		{"labels", []interface{}{"Some=Label"}, map[string]string{"Some": "Label"}},
+		{"mac_address", "SomeMac", "SomeMac"},
+		{"stdin_open", true, true},
+		{"stop_grace_period", "1m30s", func(x int) *int { return &x }(90)}, //bodge for inline *int
+		{"stop_signal", "somesignal", "somesignal"},
+		{"tty", true, true},
+		{"user", "Some User", "Some User"},
+		{"volumes", []interface{}{"/directory", "volume:/target:ro", "/abs/dir:/target", "./reldir:/target", "~/home:/target"}, expectedVolumes},
+		{"volumes", sourceAltVolumes, expectedAltVolumes},
+		{"working_dir", "SomeDirectory", "SomeDirectory"},
 	}
 }
 
@@ -166,6 +150,8 @@ func verifyContainerConfig(name string, expected interface{}, config container.C
 	case "entrypoint":
 		err = verifyValue(expected, config.Entrypoint)
 	case "environment":
+		sort.Strings(expected.([]string))
+		sort.Strings(config.Env)
 		err = verifyValue(expected, config.Env)
 	case "expose":
 		err = verifyValue(expected, config.ExposedPorts)
@@ -200,14 +186,21 @@ func verifyContainerConfig(name string, expected interface{}, config container.C
 	return nil
 }
 
+// TODO: carry on from here
+func getInvalidContainerMapping() []invalidMapping {
+	return []invalidMapping{
+		{"", ""},
+	}
+}
+
 var (
-	sourceBinds   = []string{"/directory", "volume:/target", "/abs/dir:/target", "./reldir:/target", "~/home:/target"}
+	sourceBinds   = []interface{}{"/directory", "volume:/target", "/abs/dir:/target", "./reldir:/target", "~/home:/target"}
 	expectedBinds = []string{"/abs/dir:/target:rw", "./reldir:/target:rw", "~/home:/target:rw"}
 
-	sourceLogConfig   = map[string]interface{}{"driver": "json-file", "options": map[string]string{"max-size": "12m"}}
+	sourceLogConfig   = map[string]interface{}{"driver": "json-file", "options": map[string]interface{}{"max-size": "12m"}}
 	expectedLogconfig = container.LogConfig{Type: "json-file", Config: map[string]string{"max-size": "12m"}}
 
-	sourcePortBindings = []string{"3000", "4000-4001", "5000:5000", "6000-6001:6100-6101", "127.0.0.1:7001:7001",
+	sourcePortBindings = []interface{}{"3000", "4000-4001", "5000:5000", "6000-6001:6100-6101", "127.0.0.1:7001:7001",
 		"127.0.0.1:8000-8001:8000-8001", "127.0.0.1::9000", "10000:10000/udp"}
 	expectedPortBindings = nat.PortMap{
 		"3000/tcp":  {{HostIP: "", HostPort: ""}},
@@ -225,37 +218,40 @@ var (
 
 	expectedDevices = []container.DeviceMapping{{PathOnHost: "/dev/ttyUSB0", PathInContainer: "/dev/ttyUSB0", CgroupPermissions: "rwm"}}
 
-	sourceUlimits   = map[string]interface{}{"nproc": 65535, "nofile": map[string]int{"soft": 20000, "hard": 40000}}
+	sourceUlimits   = map[string]interface{}{"nproc": 65535, "nofile": map[string]interface{}{"soft": 20000, "hard": 40000}}
 	expectedUlimits = []*units.Ulimit{{Name: "nproc", Hard: 65535, Soft: 65535}, {Name: "nofile", Hard: 40000, Soft: 20000}}
 )
 
-func getHostMapping() map[string]verifyMapping {
-	return map[string]verifyMapping{
-		"volumes":        {sourceBinds, expectedBinds},
-		"logging":        {sourceLogConfig, expectedLogconfig},
-		"network_mode":   {"host", container.NetworkMode("host")},
-		"ports":          {sourcePortBindings, expectedPortBindings},
-		"restart":        {"on-failure:5", container.RestartPolicy{Name: "on-failure", MaximumRetryCount: 5}},
-		"cap_add":        {[]string{"ALL"}, strslice.StrSlice{"ALL"}},
-		"cap_drop":       {[]string{"NET_ADMIN"}, strslice.StrSlice{"NET_ADMIN"}},
-		"dns":            {[]string{"8.8.8.8"}, []string{"8.8.8.8"}},
-		"dns_search":     {[]string{"example.com"}, []string{"example.com"}},
-		"extra_hosts":    {[]string{"somehost:162.242.195.82", "otherhost:50.31.209.229"}, []string{"somehost:162.242.195.82", "otherhost:50.31.209.229"}},
-		"ipc":            {"host", container.IpcMode("host")},
-		"pid":            {"host", container.PidMode("host")},
-		"external_links": {[]string{"db", "test:external"}, []string{"db", "test:external"}},
-		"privileged":     {true, true},
-		"read_only":      {true, true},
-		"security_opt":   {[]string{"label:user:USER", "label:role:ROLE"}, []string{"label:user:USER", "label:role:ROLE"}},
-		"tmpfs":          {[]string{"/tmp:rw,size=787448k,mode=1777"}, map[string]string{"/tmp": "rw,size=787448k,mode=1777"}},
-		"userns_mode":    {"host", container.UsernsMode("host")},
-		"shm_size":       {"64M", int64(64000000)},
-		"sysctls":        {[]string{"net.core.somaxconn=1024", "net.ipv4.tcp_syncookies=0"}, map[string]string{"net.core.somaxconn": "1024", "net.ipv4.tcp_syncookies": "0"}},
-		"init":           {true, func(x bool) *bool { return &x }(true)}, //bodge for inline *bool
+// TODO: dns and dns_search can also be string
+// TODO: sysctls can also be map
+// TODO: ports can also be a map
+func getHostMapping() []verifyMapping {
+	return []verifyMapping{
+		{"volumes", sourceBinds, expectedBinds},
+		{"logging", sourceLogConfig, expectedLogconfig},
+		{"network_mode", "host", container.NetworkMode("host")},
+		{"ports", sourcePortBindings, expectedPortBindings},
+		{"restart", "on-failure:5", container.RestartPolicy{Name: "on-failure", MaximumRetryCount: 5}},
+		{"cap_add", []interface{}{"ALL"}, strslice.StrSlice{"ALL"}},
+		{"cap_drop", []interface{}{"NET_ADMIN"}, strslice.StrSlice{"NET_ADMIN"}},
+		{"dns", []interface{}{"8.8.8.8"}, []string{"8.8.8.8"}},
+		{"dns_search", []interface{}{"example.com"}, []string{"example.com"}},
+		{"extra_hosts", []interface{}{"somehost:162.242.195.82", "otherhost:50.31.209.229"}, []string{"somehost:162.242.195.82", "otherhost:50.31.209.229"}},
+		{"ipc", "host", container.IpcMode("host")},
+		{"pid", "host", container.PidMode("host")},
+		{"external_links", []interface{}{"db", "test:external"}, []string{"db", "test:external"}},
+		{"privileged", true, true},
+		{"read_only", true, true},
+		{"security_opt", []interface{}{"label:user:USER", "label:role:ROLE"}, []string{"label:user:USER", "label:role:ROLE"}},
+		{"tmpfs", []interface{}{"/tmp:rw,size=787448k,mode=1777"}, map[string]string{"/tmp": "rw,size=787448k,mode=1777"}},
+		{"userns_mode", "host", container.UsernsMode("host")},
+		{"shm_size", "64M", int64(64000000)},
+		{"sysctls", []interface{}{"net.core.somaxconn=1024", "net.ipv4.tcp_syncookies=0"}, map[string]string{"net.core.somaxconn": "1024", "net.ipv4.tcp_syncookies": "0"}},
+		{"init", true, func(x bool) *bool { return &x }(true)}, //bodge for inline *bool
 		// Resources
-		"cgroup_parent": {"m-executor-abcd", "m-executor-abcd"},
-		"devices":       {[]string{"/dev/ttyUSB0:/dev/ttyUSB0"}, expectedDevices},
-		"ulimits":       {sourceUlimits, expectedUlimits},
+		{"cgroup_parent", "m-executor-abcd", "m-executor-abcd"},
+		{"devices", []interface{}{"/dev/ttyUSB0:/dev/ttyUSB0"}, expectedDevices},
+		{"ulimits", sourceUlimits, expectedUlimits},
 	}
 }
 
@@ -322,19 +318,19 @@ func verifyHostConfig(name string, expected interface{}, config container.HostCo
 }
 
 var (
-	sourceLinks   = []string{"db", "test"}
+	sourceLinks   = []interface{}{"db", "test"}
 	expectedLinks = []string{"db", "test"}
 )
 
-func getNetworkMapping() map[string]verifyMapping {
-	return map[string]verifyMapping{
-		"aliases":      {[]string{"db1", "db2"}, []string{"db1", "db2"}},
-		"ipv4_address": {"172.16.238.10", "172.16.238.10"},
-		"ipv6_address": {"2001:3984:3989::10", "2001:3984:3989::10"},
+func getContainerNetworkMapping() []verifyMapping {
+	return []verifyMapping{
+		{"aliases", []interface{}{"db1", "db2"}, []string{"db1", "db2"}},
+		{"ipv4_address", "172.16.238.10", "172.16.238.10"},
+		{"ipv6_address", "2001:3984:3989::10", "2001:3984:3989::10"},
 	}
 }
 
-func verifyNetworkConfig(name string, expected interface{}, config networktypes.NetworkingConfig) error {
+func verifyContainerNetworkConfig(name string, expected interface{}, config networktypes.NetworkingConfig) error {
 	network, isSet := config.EndpointsConfig["test"]
 	if !isSet {
 		return fmt.Errorf("\"test\" network has not been created")
